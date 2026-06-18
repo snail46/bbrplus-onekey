@@ -214,12 +214,19 @@ install_bbrplus_kernel() {
             echo -e "${INFO} 正在通过 YUM 本地安装内核包，请稍候..."
             yum localinstall -y kernel-headers.rpm kernel.rpm
             
-            # 配置 grub2 默认启动内核
-            echo -e "${INFO} 正在更新 Grub2 启动配置项..."
+            # 锁定并配置 CentOS grub2 默认启动内核
+            echo -e "${INFO} 正在动态分析并更新 Grub2 启动配置项..."
             if [ -f /boot/grub2/grub.cfg ]; then
                 grub2-mkconfig -o /boot/grub2/grub.cfg >/dev/null 2>&1
-                local kernel_name="CentOS Linux (4.14.129-bbrplus) 7 (Core)"
-                grub2-set-default "${kernel_name}"
+                local bbrplus_entry=$(awk -F\' '/menuentry / {print $2}' /boot/grub2/grub.cfg | grep "bbrplus" | head -n 1)
+                if [ -z "$bbrplus_entry" ]; then
+                    bbrplus_entry=$(awk -F\" '/menuentry / {print $2}' /boot/grub2/grub.cfg | grep "bbrplus" | head -n 1)
+                fi
+                if [ -n "$bbrplus_entry" ]; then
+                    grub2-set-default "$bbrplus_entry"
+                else
+                    grub2-set-default "CentOS Linux (4.14.129-bbrplus) 7 (Core)"
+                fi
             fi
         else
             echo -e "${ERROR} CentOS ${OS_VER} 的 BBRplus 自动安装支持受限，请考虑手动升级或更换为 Debian/Ubuntu！"
@@ -236,23 +243,70 @@ install_bbrplus_kernel() {
         echo -e "${INFO} 正在通过 DPKG 部署 BBRplus 内核，请稍候..."
         dpkg -i linux-headers.deb linux-image.deb
         
-        # 更新 Ubuntu/Debian 引导程序
+        # 核心修复：动态锁定并锁定 Debian/Ubuntu 的 GRUB 默认引导项为 BBRplus，防止新内核抢占引导
+        echo -e "${INFO} 正在动态解析并锁定 BBRplus 内核引导顺序..."
+        if [ -f /boot/grub/grub.cfg ]; then
+            if [ -f /etc/default/grub ]; then
+                # 备份默认设置
+                cp /etc/default/grub /etc/default/grub.bak
+                
+                # 获取 GRUB 菜单中的子菜单标识（Submenu ID/Title）
+                local submenu_raw=$(grep -i "submenu" /boot/grub/grub.cfg | head -n 1)
+                local submenu_val=""
+                if [[ "$submenu_raw" =~ --id ]]; then
+                    submenu_val=$(echo "$submenu_raw" | sed -n 's/.*--id \([^ ]*\).*/\1/p' | tr -d "'\"")
+                fi
+                if [ -z "$submenu_val" ]; then
+                    submenu_val=$(echo "$submenu_raw" | cut -d"'" -f2)
+                fi
+                if [ -z "$submenu_val" ]; then
+                    submenu_val=$(echo "$submenu_raw" | cut -d'"' -f2)
+                fi
+
+                # 获取 BBRplus 内核的启动项标识（Menuentry ID/Title）
+                local entry_raw=$(grep -i "menuentry" /boot/grub/grub.cfg | grep "bbrplus" | head -n 1)
+                local entry_val=""
+                if [[ "$entry_raw" =~ --id ]]; then
+                    entry_val=$(echo "$entry_raw" | sed -n 's/.*--id \([^ ]*\).*/\1/p' | tr -d "'\"")
+                fi
+                if [ -z "$entry_val" ]; then
+                    entry_val=$(echo "$entry_raw" | cut -d"'" -f2)
+                fi
+                if [ -z "$entry_val" ]; then
+                    entry_val=$(echo "$entry_raw" | cut -d'"' -f2)
+                fi
+
+                # 完美写入 GRUB
+                if [ -n "$entry_val" ]; then
+                    if [ -n "$submenu_val" ]; then
+                        sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT="'"$submenu_val"'>'"$entry_val"'"/g' /etc/default/grub
+                    else
+                        sed -i 's/^GRUB_DEFAULT=.*/GRUB_DEFAULT="'"$entry_val"'"/g' /etc/default/grub
+                    fi
+                fi
+            fi
+        fi
+        
+        # 更新 Debian/Ubuntu 引导程序
         echo -e "${INFO} 正在更新 GRUB 引导记录..."
         update-grub
     fi
 
     # 清理安装残留包
     cd /tmp && rm -rf "${tmp_dir}"
-    echo -e "${GREEN}[成功] BBRplus 内核安装包部署完成！当前已经将 4.14.129-bbrplus 设置为首选启动内核。${PLAIN}"
+    echo -e "${GREEN}[成功] BBRplus 内核安装包部署并已被锁定为默认引导！${PLAIN}"
     echo -e "${WARNING} 注意: 必须 ${RED}重启系统${YELLOW} 引导进新内核后才能彻底生效运行。${PLAIN}"
 }
 
 # 彻底开启 BBRplus / BBR 网络加速配置
 enable_bbr_acceleration() {
-    # 检查是否已经是 BBRplus 内核在运行
     local current_kernel=$(uname -r)
     
     echo -e "${INFO} 正在对系统全局网络进行加速参数配置..."
+    
+    # 尝试加载内核模块，防止部分轻量版系统在开启时抛出未加载异常
+    modprobe tcp_bbr >/dev/null 2>&1
+    modprobe tcp_bbrplus >/dev/null 2>&1
     
     # 检查当前内核环境是否支持 BBRplus
     if [[ "${current_kernel}" == *"bbrplus"* ]]; then
@@ -267,16 +321,27 @@ EOF
         sysctl -p /etc/sysctl.d/90-bbr-tune.conf >/dev/null 2>&1
         echo -e "${GREEN}[成功] BBRplus TCP 拥塞控制已被成功激活并锁定运行！${PLAIN}"
     else
-        echo -e "${WARNING} 系统当前内核版本为 [${current_kernel}]，没有直接启用 BBRplus 特性。"
-        echo -e "${INFO} 为了不干扰您的使用，我们将优先开启标准 Linux 内核原生自带的 ${GREEN}标准 BBR 加速${PLAIN} 功能。"
+        echo -e "${WARNING} 系统当前运行的内核版本为 [${current_kernel}]，没有启用 BBRplus 特性。"
         
-        cat > /etc/sysctl.d/90-bbr-tune.conf <<EOF
+        # 动态提取并判定主次内核版本号，看是否支持免重启原生 BBR 激活 (>= 4.9)
+        local main_ver=$(echo "${current_kernel}" | cut -d'.' -f1)
+        local sub_ver=$(echo "${current_kernel}" | cut -d'.' -f2)
+        
+        if [ "${main_ver}" -gt 4 ] || { [ "${main_ver}" -eq 4 ] && [ "${sub_ver}" -ge 9 ]; }; then
+            echo -e "${INFO} 检测到当前内核版本支持原生 BBR。正在为您【免重启直接激活】标准 BBR 加速..."
+            
+            cat > /etc/sysctl.d/90-bbr-tune.conf <<EOF
 # 标准 BBR 启动配置
 net.core.default_qdisc = fq
 net.ipv4.tcp_congestion_control = bbr
 EOF
-        sysctl -p /etc/sysctl.d/90-bbr-tune.conf >/dev/null 2>&1
-        echo -e "${GREEN}[成功] 标准 BBR 算法开启成功！${PLAIN}"
+            sysctl -p /etc/sysctl.d/90-bbr-tune.conf >/dev/null 2>&1
+            echo -e "${GREEN}[成功] 原生 BBR 算法开启成功，且已立即生效（无需重启）！${PLAIN}"
+            echo -e "${INFO} 温馨提示: 如果您后期想使用更激进的 BBRplus，请在主菜单选择 [2] 部署 BBRplus 内核并重启。"
+        else
+            echo -e "${ERROR} 抱歉，当前系统原版内核版本过低（低于 4.9），不支持任何 BBR 拥塞控制。"
+            echo -e "${INFO} 强烈建议您选择菜单中的选项 [2] 安装 BBRplus 内核并重启！"
+        fi
     fi
 }
 
@@ -292,7 +357,7 @@ show_menu() {
     echo -e "${CYAN}======================================================${PLAIN}"
     echo -e " ${GREEN}1.${PLAIN} 执行系统深度调优 (一键优化系统 limits + 8MB UDP 缓存 + 队列)"
     echo -e " ${GREEN}2.${PLAIN} 一键安装 BBRplus 专用加速内核并设置为默认引导"
-    echo -e " ${GREEN}3.${PLAIN} 自动开启网络拥塞算法 (BBR / BBRplus 加速机制)"
+    echo -e " ${GREEN}3.${PLAIN} 自动开启网络拥塞算法 (原生 BBR 免重启 / BBRplus 加速机制)"
     echo -e " ${GREEN}4.${PLAIN} 运行一键式组合包 [ 选项 1 + 2 + 3 ] 彻底极速调优"
     echo -e " ${GREEN}5.${PLAIN} 查看当前系统详细的内核加速状态"
     echo -e " ${RED}6. 退出脚本${PLAIN}"
