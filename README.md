@@ -17,3 +17,9 @@ wget -O bbrplus_optimize.sh "https://raw.githubusercontent.com/snail46/bbrplus-o
 bash <(curl -sL "https://raw.githubusercontent.com/snail46/bbrplus-onekey/refs/heads/main/bbrplus_optimize.sh")
 
 ```
+
+
+
+#1. 内核网络栈与 BBR 调优 (sysctl.conf)
+#2. 修改系统文件句柄限制 (ulimit)
+```curl -sSL https://raw.githubusercontent.com/snail46/bbrplus-onekey/refs/heads/main/optimize.sh | sudo bash```
