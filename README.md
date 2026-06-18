@@ -21,5 +21,12 @@ bash <(curl -sL "https://raw.githubusercontent.com/snail46/bbrplus-onekey/refs/h
 
 
 #1. 内核网络栈与 BBR 调优 (sysctl.conf)
+
 #2. 修改系统文件句柄限制 (ulimit)
-```curl -sSL https://raw.githubusercontent.com/snail46/bbrplus-onekey/refs/heads/main/optimize.sh | sudo bash```
+
+#3. 修改 Systemd 全局服务限制
+
+#4. 优化 VPS 本地 DNS 解析
+```
+curl -sSL https://raw.githubusercontent.com/snail46/bbrplus-onekey/refs/heads/main/optimize.sh | sudo bash
+```
