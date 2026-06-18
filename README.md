@@ -14,5 +14,6 @@ wget -O bbrplus_optimize.sh "https://raw.githubusercontent.com/snail46/bbrplus-o
 
 ```bash
 
-bash <(curl -sL "https://raw.githubusercontent.com/您的用户名/仓库名/refs/heads/main/bbrplus_optimize.sh")
+bash <(curl -sL "https://raw.githubusercontent.com/snail46/bbrplus-onekey/refs/heads/main/bbrplus_optimize.sh")
+
 ```
